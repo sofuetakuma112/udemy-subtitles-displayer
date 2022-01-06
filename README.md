@@ -1,6 +1,6 @@
-# Chrome Extension Sample
+# Translate Udemy subtitles
 
-Chrome Extension Sample
+Translate Udemy subtitles
 
 ## Prerequisites
 
