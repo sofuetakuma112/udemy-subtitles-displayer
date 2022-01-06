@@ -3,3 +3,5 @@ node_modules/
 dist/
 tmp/
 src/firebase.ts
+subtitles/
+*.txt
