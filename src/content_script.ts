@@ -2,7 +2,7 @@ import axios from "axios";
 import { db, functions, storage } from "./firebase";
 import { collection, doc, getDoc, setDoc } from "firebase/firestore";
 import { httpsCallable } from "firebase/functions";
-import { getStorage, ref, uploadBytes } from "firebase/storage";
+import { ref, uploadBytes, getDownloadURL, listAll } from "firebase/storage";
 
 type Subtitle = {
   from: string;
@@ -434,9 +434,15 @@ const translate_current_lecture = async () => {
     }
   }
 
-  // console.log(subtitle)
+  await translate_vtt_data(subtitle);
+};
 
-  const subtitleSplitByLine = subtitle.split("\n").filter((line) => line);
+const translate_vtt_data = async (
+  vtt: string,
+  courseId: string = "",
+  lectureId: string = ""
+) => {
+  const subtitleSplitByLine = vtt.split("\n").filter((line) => line);
   const subtitleSplitByLineAndRemovedEmptyChar = subtitleSplitByLine.slice(
     1,
     subtitleSplitByLine.length
@@ -518,63 +524,51 @@ const translate_current_lecture = async () => {
     }
   });
 
-  console.log(
-    "このレクチャーの原文の文字数: ",
-    arrayPerSentence
-      .map((sentenceAndFromTo) => sentenceAndFromTo.sentence)
-      .join(" ").length
-  );
+  // console.log(
+  //   "このレクチャーの原文の文字数: ",
+  //   arrayPerSentence
+  //     .map((sentenceAndFromTo) => sentenceAndFromTo.sentence)
+  //     .join(" ").length
+  // );
 
-  // for await (const sentenceAndFromTo of arrayPerSentence) {
-  //   const collectionName = "translated_en";
-  //   const sentence_en = sentenceAndFromTo.sentence;
-  //   const docRef = doc(db, collectionName, sentence_en);
-  //   const docSnap = await getDoc(docRef);
-  //   let text_ja = "";
-  //   if (docSnap.exists()) {
-  //     text_ja = docSnap.data().text_ja;
-  //   } else {
-  //     // 翻訳APIを叩く
-  //     const source = "en";
-  //     const target = "ja";
-  //     const res = await axios.get(
-  //       `https://script.google.com/macros/s/AKfycbwHvOCeufro86JCbI8pZh_XdDXahWLv8tvmqhC_jfYkEXMtm00N6o-pzU5D0bTvGZLfDA/exec?text=${sentence_en}&source=${source}&target=${target}`
-  //     );
-  //     text_ja = res.data.text;
-  //     // 英語と日本語の対を保存しておき、再度同じテキストを翻訳するのを防ぐ
-  //     const translatedEnRef = collection(db, collectionName);
-  //     try {
-  //       await setDoc(doc(translatedEnRef, sentence_en), {
-  //         text_ja,
-  //       });
-  //     } catch (error: any) {
-  //       console.log(error.message);
-  //     }
-  //   }
-  //   translatedSentences.push({
-  //     from: sentenceAndFromTo.from,
-  //     to: sentenceAndFromTo.to,
-  //     sentence: text_ja,
-  //   });
-  //   // vttPerSentence += `${sentenceAndFromTo.from} --> ${sentenceAndFromTo.to}\n${sentenceAndFromTo.sentence}\n\n`;
-  // }
+  // Cloud StorageにJSONがあるか問い合わせる
+  const cid = courseId || get_args_course_id();
+  const lid = lectureId || get_args_lecture_id();
+  const jsonRef = ref(storage, `${cid}/${lid}.json`);
 
-  // DeepLで翻訳する
-  const translatedSentences: Sentence[] = await translate_text_by_deepl_website(
-    arrayPerSentence
-  );
-
-  console.log(translatedSentences);
-  // Create a reference
-  const courseId = get_args_course_id();
-  const lectureId = get_args_lecture_id();
-  const jsonRef = ref(storage, `${courseId}/${lectureId}`);
-
-  const json = JSON.stringify(translatedSentences);
-  const blob = new Blob([json], { type: "application/json" });
-
-  await uploadBytes(jsonRef, blob);
-  console.log("Uploaded a blob or file!");
+  try {
+    // JSONから翻訳データを取得する
+    const url = await getDownloadURL(jsonRef);
+    const response = await fetch(url);
+    const reader = response.body?.getReader();
+    let data = null;
+    while (true) {
+      if (!reader) continue;
+      const result = await reader.read();
+      if (result.done) {
+        break;
+      } else {
+        const decoder = new TextDecoder();
+        data = JSON.parse(decoder.decode(result.value));
+      }
+    }
+  } catch (error: any) {
+    if (error.message.indexOf("storage/object-not-found") === -1) {
+      // JSONが存在しないこと以外のエラー
+      throw Error(error);
+    } else {
+      // // DeepLで翻訳する
+      const translatedSentences: Sentence[] =
+        await translate_text_by_deepl_website(arrayPerSentence);
+      if (translatedSentences.length !== arrayPerSentence.length)
+        throw Error("英 => 日で文章の対応関係が正しくない");
+      // Cloud StorageにJSONを保存
+      const json = JSON.stringify(translatedSentences);
+      const blob = new Blob([json], { type: "application/json" });
+      await uploadBytes(jsonRef, blob);
+      console.log("Uploaded a blob or file!");
+    }
+  }
 };
 
 const translate_text_by_deepl_website = async (
@@ -586,6 +580,52 @@ const translate_text_by_deepl_website = async (
   return res.data.translatedSentences;
 };
 
+const translate_all_vtt_data = async () => {
+  // 字幕データのダウンロード
+  let course_id = get_args_course_id(); // URLからコースIDを取得
+  let data = await get_course_data(); // URLから取得したコースIDとCookieから取得した認証情報を元にコース全体のデータを取得する
+  await sleep(1000);
+  let array = data.results; // chapter, lecture等が入った配列
+  for await (const result of array) {
+    if (result._class == "lecture") {
+      let lecture_id = result.id;
+      // 引数を渡さなかった（空文字の）場合は、現在のレクチャーとして扱われます
+      const data = await get_lecture_data(course_id, lecture_id); // 現在のレクチャーのデータを取得する
+      await sleep(1000);
+      const lecture_id_from_fetched_data = data.id; // 取得したレクチャーデータから、このレクチャーのidを取得する
+      const lecture_title = await get_lecture_title_by_id(
+        lecture_id_from_fetched_data
+      ); // レクチャーidでレクチャータイトルを検索する
+      await sleep(1000);
+      // 複数の言語の字幕データが入ってくるので、data.asset.captions.lengthが1以上になることもある
+      const captions_en = data.asset.captions.find(
+        (caption: any) => caption.video_label.indexOf("英語") !== -1
+      );
+      if (!captions_en || !captions_en.url) continue;
+      // 字幕データのダウンロード
+      const url = captions_en.url;
+      const response = await fetch(url);
+      const reader = response.body?.getReader();
+      let vtt = "";
+      while (true) {
+        if (!reader) continue;
+        const result = await reader.read();
+        if (result.done) {
+          break;
+        } else {
+          const decoder = new TextDecoder();
+          vtt += decoder.decode(result.value);
+        }
+      }
+      console.log(`${lecture_title}の字幕データを日本語に翻訳する`);
+      await translate_vtt_data(vtt, course_id, lecture_id);
+      sleep(5000);
+    }
+  }
+};
+
 // inject_our_script();
 
-translate_current_lecture();
+// translate_current_lecture();
+
+// translate_all_vtt_data();
