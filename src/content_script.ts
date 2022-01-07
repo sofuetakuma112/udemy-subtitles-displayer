@@ -1,6 +1,20 @@
 import axios from "axios";
-import { db } from "./firebase";
+import { db, functions, storage } from "./firebase";
 import { collection, doc, getDoc, setDoc } from "firebase/firestore";
+import { httpsCallable } from "firebase/functions";
+import { getStorage, ref, uploadBytes } from "firebase/storage";
+
+type Subtitle = {
+  from: string;
+  to: string;
+  subtitle: string;
+};
+
+type Sentence = {
+  from: string;
+  to: string;
+  sentence: string;
+};
 
 const timeToNumber = (time: string) => {
   const minute = time.split(":")[0];
@@ -135,19 +149,22 @@ async function download_lecture_video() {
   let lecture_title = await get_lecture_title_by_id(lecture_id); // idでタイトルを検索する
 
   let r = data.asset.media_sources[0];
-  // let example = {
-  //   "type": "video/mp4",
-  //   "src": "https://mp4-a.udemycdn.com/2020-12-04_12-48-10-150cfde997c5ba9f05e5e7d86c813db3/1/WebHD_720p.mp4?lKL6M-V-HXBl9MVKyHqfbP9nVBBFDd6lLLXl7USDCVB63OhpUk722Vt6EW1NlopbdZmF9J_9YZCTOhMrhxj26O1uGmgUqUL4F8e79BxKUeKCnxjTKPo3vA6eRzNAINw4k174S8MaD7ND9b37F_TOs4mxC9BLcUyPTxrSMhDLbjQuWl_P",
-  //   "label": "720"
-  // }
+  console.log("data", data);
+  // console.log('data.asset.media_sources', data.asset.media_sources)
+  // r => {
+  //   type: "application/x-mpegURL",
+  //   src: "https://www.udemy.com/assets/18738176/encrypted-files/out/v1/1c1e0dfe7de744749849c4c3df5e45b3/b6fdc5264b9047629c0ed790b2c7ecd3/b4ad6e003a0e45bd8935a17376a85b0a/index.m3u8?token=eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.eyJwYXRoIjoib3V0L3YxLzFjMWUwZGZlN2RlNzQ0NzQ5ODQ5YzRjM2RmNWU0NWIzL2I2ZmRjNTI2NGI5MDQ3NjI5YzBlZDc5MGIyYzdlY2QzL2I0YWQ2ZTAwM2EwZTQ1YmQ4OTM1YTE3Mzc2YTg1YjBhLyIsImV4cCI6MTY0MTQ5ODUwMX0.J6sGQg8l_JOeb4PxVOX6pPe6ArsQ4LCs98jxfnYROnU&provider=cloudfront&v=1",
+  //   label: "auto",
+  // };
 
-  let url = r.src; // "https://mp4-a.udemycdn.com/2020-12-04_12-48-10-150cfde997c5ba9f05e5e7d86c813db3/1/WebHD_720p.mp4?XquxJGAXiyTc17qxb6iyah_9GXvjHC43UK98UHC3LUkZk7q9yPPll-BJ-5RKz--T9ucjtKOES68m_rZ6vzDZkyEROWwuaoHGFsr3DDuN0AWwk3RpjEo-JNfp98iIaEd_0Vfk0te375rNGtvtCnXibgcZmxDOx4tI5jqFKkl5hVDnwVE7"
-  let resolution = r.label; // 720 or 1080
+  let url = r.src;
+  let resolution = 1080; // r.label;
   let filename = `${safe_filename(lecture_title ?? "")}_${resolution}p.mp4`; // 构造文件名
-  let type = r.type;
+  let type = r.type; // application/x-mpegURL
 
+  // Response は Fetch API のインターフェイスで、リクエストのレスポンスを表します。
   fetch(url)
-    .then((res) => res.blob())
+    .then((res: Response) => res.blob())
     .then((blob) => {
       downloadString(blob, type, filename);
       button3.textContent =
@@ -327,9 +344,12 @@ function save_vtt(url: string, filename: string) {
 // Example downloadString(srt, "text/plain", filename);
 function downloadString(
   text: string | Blob,
-  fileType: string,
+  fileType: string, // application/x-mpegURL
   fileName: string
 ) {
+  // Blobとは、BLOB（Binary Large Object）を扱うためJavaScriptのオブジェクトです。
+  // BlobによってJSでバイナリデータを扱うことが出来る
+  // new Blob(【ファイルの内容の配列】,【ファイルの種類（MIMEタイプ）】);
   let blob = new Blob([text], {
     type: fileType,
   });
@@ -360,8 +380,6 @@ async function get_course_lecture_number() {
   }
   return num;
 }
-
-inject_our_script();
 
 const translate_current_lecture = async () => {
   // chrome.devtools.network等から字幕データのURLを取得する
@@ -424,26 +442,37 @@ const translate_current_lecture = async () => {
     subtitleSplitByLine.length
   );
 
-  type Subtitle = {
-    from: string;
-    to: string;
-    subtitle: string;
-  };
+  let subtitleSplitByLineAndRemovedEmptyCharAndIndexNumber = [];
+  if (Number.isInteger(Number(subtitleSplitByLineAndRemovedEmptyChar[0]))) {
+    // timestampの上にindexが存在するタイプのvtt
+    subtitleSplitByLineAndRemovedEmptyCharAndIndexNumber =
+      subtitleSplitByLineAndRemovedEmptyChar.filter(
+        (line, index) => index % 3 !== 0
+      );
+  } else {
+    subtitleSplitByLineAndRemovedEmptyCharAndIndexNumber =
+      subtitleSplitByLineAndRemovedEmptyChar;
+  }
+
+  // subtitleSplitByLineAndRemovedEmptyCharAndIndexNumberをDeepLに突っ込む
 
   const subtitles_array: Subtitle[] = [];
-  for (let i = 0; i < subtitleSplitByLineAndRemovedEmptyChar.length / 2; i++) {
-    const timeAndSubtitle = subtitleSplitByLineAndRemovedEmptyChar.slice(
-      i * 2,
-      i * 2 + 2
-    );
+  for (
+    let i = 0;
+    i < subtitleSplitByLineAndRemovedEmptyCharAndIndexNumber.length / 2;
+    i++
+  ) {
+    const timeAndSubtitle =
+      subtitleSplitByLineAndRemovedEmptyCharAndIndexNumber.slice(
+        i * 2,
+        i * 2 + 2
+      );
     const time = timeAndSubtitle[0];
     const subtitle = timeAndSubtitle[1];
     const fromTo = time.split(" --> ");
     const from = fromTo[0];
     const to = fromTo[1];
     subtitles_array.push({
-      // from: timeToNumber(from),
-      // to: timeToNumber(to),
       from,
       to,
       subtitle,
@@ -464,12 +493,6 @@ const translate_current_lecture = async () => {
       sentence_array.push(subtitle_array);
     }
   });
-
-  type Sentence = {
-    from: string;
-    to: string;
-    sentence: string;
-  };
 
   const arrayPerSentence: Sentence[] = [];
   sentences_array.forEach((sentenceArray) => {
@@ -502,53 +525,67 @@ const translate_current_lecture = async () => {
       .join(" ").length
   );
 
-  // let vttPerSentence = `WEBVTT\n\n`;
-  const startTime = performance.now(); // 開始時間
+  // for await (const sentenceAndFromTo of arrayPerSentence) {
+  //   const collectionName = "translated_en";
+  //   const sentence_en = sentenceAndFromTo.sentence;
+  //   const docRef = doc(db, collectionName, sentence_en);
+  //   const docSnap = await getDoc(docRef);
+  //   let text_ja = "";
+  //   if (docSnap.exists()) {
+  //     text_ja = docSnap.data().text_ja;
+  //   } else {
+  //     // 翻訳APIを叩く
+  //     const source = "en";
+  //     const target = "ja";
+  //     const res = await axios.get(
+  //       `https://script.google.com/macros/s/AKfycbwHvOCeufro86JCbI8pZh_XdDXahWLv8tvmqhC_jfYkEXMtm00N6o-pzU5D0bTvGZLfDA/exec?text=${sentence_en}&source=${source}&target=${target}`
+  //     );
+  //     text_ja = res.data.text;
+  //     // 英語と日本語の対を保存しておき、再度同じテキストを翻訳するのを防ぐ
+  //     const translatedEnRef = collection(db, collectionName);
+  //     try {
+  //       await setDoc(doc(translatedEnRef, sentence_en), {
+  //         text_ja,
+  //       });
+  //     } catch (error: any) {
+  //       console.log(error.message);
+  //     }
+  //   }
+  //   translatedSentences.push({
+  //     from: sentenceAndFromTo.from,
+  //     to: sentenceAndFromTo.to,
+  //     sentence: text_ja,
+  //   });
+  //   // vttPerSentence += `${sentenceAndFromTo.from} --> ${sentenceAndFromTo.to}\n${sentenceAndFromTo.sentence}\n\n`;
+  // }
 
-  const translatedSentences: Sentence[] = [];
-  for await (const sentenceAndFromTo of arrayPerSentence) {
-    const collectionName = "translated_en";
-    const sentence_en = sentenceAndFromTo.sentence;
-    const docRef = doc(db, collectionName, sentence_en);
-    const docSnap = await getDoc(docRef);
-    let text_ja = "";
-    if (docSnap.exists()) {
-      text_ja = docSnap.data().text_ja;
-    } else {
-      // 翻訳APIを叩く
-      const source = "en";
-      const target = "ja";
-      const res = await axios.get(
-        `https://script.google.com/macros/s/AKfycbwHvOCeufro86JCbI8pZh_XdDXahWLv8tvmqhC_jfYkEXMtm00N6o-pzU5D0bTvGZLfDA/exec?text=${sentence_en}&source=${source}&target=${target}`
-      );
-      text_ja = res.data.text;
-      // 英語と日本語の対を保存しておき、再度同じテキストを翻訳するのを防ぐ
-      const translatedEnRef = collection(db, collectionName);
-      try {
-        await setDoc(doc(translatedEnRef, sentence_en), {
-          text_ja,
-        });
-      } catch (error: any) {
-        console.log(error.message);
-      }
-    }
-    translatedSentences.push({
-      from: sentenceAndFromTo.from,
-      to: sentenceAndFromTo.to,
-      sentence: text_ja,
-    });
-    // vttPerSentence += `${sentenceAndFromTo.from} --> ${sentenceAndFromTo.to}\n${sentenceAndFromTo.sentence}\n\n`;
-  }
-
-  const endTime = performance.now(); // 終了時間
-
-  console.log((endTime - startTime) / 1000, " [s]"); // 何ミリ秒かかったかを表示する
-
-  // console.log(translatedSentences);
-
-  console.log(
-    translatedSentences
-      .map((sentenceAndFromTo) => sentenceAndFromTo.sentence)
-      .join("\n")
+  // DeepLで翻訳する
+  const translatedSentences: Sentence[] = await translate_text_by_deepl_website(
+    arrayPerSentence
   );
+
+  console.log(translatedSentences);
+  // Create a reference
+  const courseId = get_args_course_id();
+  const lectureId = get_args_lecture_id();
+  const jsonRef = ref(storage, `${courseId}/${lectureId}`);
+
+  const json = JSON.stringify(translatedSentences);
+  const blob = new Blob([json], { type: "application/json" });
+
+  await uploadBytes(jsonRef, blob);
+  console.log("Uploaded a blob or file!");
 };
+
+const translate_text_by_deepl_website = async (
+  data: Sentence[]
+): Promise<Sentence[]> => {
+  const res = await axios.post(`http://localhost:3000/api/translate`, {
+    data,
+  });
+  return res.data.translatedSentences;
+};
+
+// inject_our_script();
+
+translate_current_lecture();
