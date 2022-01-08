@@ -382,59 +382,225 @@ async function get_course_lecture_number() {
 }
 
 const translate_current_lecture = async () => {
-  // chrome.devtools.network等から字幕データのURLを取得する
-  let dom = null;
-  while (!dom) {
-    // コースIDを取得するために必要なDOM（get_args関数内で使用するDOM）が描画されるまで待機
-    dom = document.querySelector(".ud-app-loader");
-    await sleep(250);
-  }
-  const data = await get_lecture_data(); // 現在のレクチャーのデータを取得する（引数を渡さなかった（空文字の）場合は、現在のレクチャーを取得）
-  const lecture_id_from_fetched_data = data.id; // 取得したレクチャーデータから、このレクチャーのidを取得する
-  const lecture_title = await get_lecture_title_by_id(
-    lecture_id_from_fetched_data
-  ); // レクチャーidでレクチャータイトルを検索する
-
-  // 複数の言語の字幕データが入ってくるので、data.asset.captions.lengthが1以上になることもある
-  const captions_en = data.asset.captions.find(
-    (caption: any) => caption.video_label.indexOf("英語") !== -1
-  );
-  if (!lecture_title) throw Error("lecture_title is null");
-  if (!captions_en) return; // 文字のみのレクチャー or 英語字幕がないレクチャーはここで返す
-  const subtitleUrl = captions_en.url;
-
-  // 字幕データのURLから字幕データを取得する
-  const response = await fetch(subtitleUrl, {
-    headers: {
-      accept: "application/json, text/plain, */*",
-      "accept-language": "ja-JP,ja;q=0.9,en-US;q=0.8,en;q=0.7",
-      "referrer-policy": "strict-origin-when-cross-origin",
-      "sec-ch-ua":
-        '" Not A;Brand";v="99", "Chromium";v="96", "Google Chrome";v="96"',
-      "sec-ch-ua-mobile": "?0",
-      "sec-ch-ua-platform": '"Linux"',
-    },
-    referrer: "https://www.udemy.com/",
-    referrerPolicy: "strict-origin-when-cross-origin",
-    body: null,
-    method: "GET",
-    mode: "cors",
-    credentials: "omit",
-  });
-  const reader = response.body?.getReader();
-  let subtitle = "";
-  while (true) {
-    if (!reader) continue;
-    const result = await reader.read();
-    if (result.done) {
-      break;
-    } else {
-      const decoder = new TextDecoder();
-      subtitle += decoder.decode(result.value);
+  // 現在のページのレクチャーのvttデータを取得する
+  const getCurrentLectureVtt = async () => {
+    // chrome.devtools.network等から字幕データのURLを取得する
+    let dom = null;
+    while (!dom) {
+      // コースIDを取得するために必要なDOM（get_args関数内で使用するDOM）が描画されるまで待機
+      dom = document.querySelector(".ud-app-loader");
+      await sleep(250);
     }
-  }
+    const data = await get_lecture_data(); // 現在のレクチャーのデータを取得する（引数を渡さなかった（空文字の）場合は、現在のレクチャーを取得）
+    const lecture_id_from_fetched_data = data.id; // 取得したレクチャーデータから、このレクチャーのidを取得する
+    const lecture_title = await get_lecture_title_by_id(
+      lecture_id_from_fetched_data
+    ); // レクチャーidでレクチャータイトルを検索する
 
-  await translate_vtt_data(subtitle);
+    // 複数の言語の字幕データが入ってくるので、data.asset.captions.lengthが1以上になることもある
+    const captions_en = data.asset.captions.find(
+      (caption: any) => caption.video_label.indexOf("英語") !== -1
+    );
+    if (!lecture_title) throw Error("lecture_title is null");
+    if (!captions_en) return; // 文字のみのレクチャー or 英語字幕がないレクチャーはここで返す
+    const subtitleUrl = captions_en.url;
+
+    // 字幕データのURLから字幕データを取得する
+    const response = await fetch(subtitleUrl, {
+      headers: {
+        accept: "application/json, text/plain, */*",
+        "accept-language": "ja-JP,ja;q=0.9,en-US;q=0.8,en;q=0.7",
+        "referrer-policy": "strict-origin-when-cross-origin",
+        "sec-ch-ua":
+          '" Not A;Brand";v="99", "Chromium";v="96", "Google Chrome";v="96"',
+        "sec-ch-ua-mobile": "?0",
+        "sec-ch-ua-platform": '"Linux"',
+      },
+      referrer: "https://www.udemy.com/",
+      referrerPolicy: "strict-origin-when-cross-origin",
+      body: null,
+      method: "GET",
+      mode: "cors",
+      credentials: "omit",
+    });
+    const reader = response.body?.getReader();
+    let vtt = "";
+    while (true) {
+      if (!reader) continue;
+      const result = await reader.read();
+      if (result.done) {
+        break;
+      } else {
+        const decoder = new TextDecoder();
+        vtt += decoder.decode(result.value);
+      }
+    }
+    return vtt;
+  };
+
+  // Storage or getCurrentLectureVtt + translate_vtt_data で日本語の構造化されたvttを取得する
+  const getJapaneseStructuredVtt = async () => {
+    // Cloud StorageにJSONがあるか問い合わせる
+    const jsonRef = ref(
+      storage,
+      `${get_args_course_id()}/${get_args_lecture_id()}.json`
+    );
+    let translatedSentences: Sentence[] | null = null;
+    try {
+      // JSONから翻訳データを取得する
+      const url = await getDownloadURL(jsonRef);
+      const response = await fetch(url);
+      const reader = response.body?.getReader();
+      while (true) {
+        if (!reader) continue;
+        const result = await reader.read();
+        if (result.done) {
+          break;
+        } else {
+          const decoder = new TextDecoder();
+          translatedSentences = JSON.parse(decoder.decode(result.value));
+        }
+        await sleep(250);
+      }
+    } catch {
+      // JSONがない
+      const vtt = await getCurrentLectureVtt();
+      if (!vtt) throw Error("vttデータの取得に失敗");
+      translatedSentences = await translate_vtt_data(vtt);
+    }
+    return translatedSentences;
+  };
+
+  // 現在のレクチャーの要素を取得して返す
+  // 字幕のコンテナの一つ上 aria-label="Video Player"
+  const getCurrentLectureVideoContainer = async () => {
+    let subtitleWrapperWrapper = null;
+    while (!subtitleWrapperWrapper) {
+      subtitleWrapperWrapper = document.querySelector(
+        '[aria-label="Video Player"]'
+      );
+      await sleep(500);
+    }
+    const htmlCollections = Array.from(subtitleWrapperWrapper.children);
+    const videoElem = htmlCollections[0];
+    const subtitleWrapper = htmlCollections[htmlCollections.length - 1];
+    return [videoElem, subtitleWrapper];
+  };
+
+  // 取得した要素に字幕表示用のDOMを追加する
+  const insertDivElementToElement = (parentElement: Node) => {
+    const div_css = `
+    margin-bottom: 10px;
+    display: flex;
+    background-color: #333;
+    opacity: 0.75;
+    font-size: 24px;
+    padding: 0px 20px;
+  `;
+    const subtitle_div = document.createElement("div");
+    subtitle_div.setAttribute("style", div_css);
+    parentElement.appendChild(subtitle_div);
+
+    return subtitle_div;
+  };
+
+  const displaySubtitlesBasedOnCurrentTime = (
+    videoElem: any,
+    subtitle_div: Node,
+    translatedSentences: Sentence[]
+  ) => {
+    // 直近のcurrentTimeと一致したsentenceFromToを控えておく
+    let sentenceFromTo: Sentence | undefined;
+    // currentTimeが渡されたsentenceFromToの範囲内にあるか調べる
+    const checkCurrentTimeWithinRange = (
+      currentTime: number,
+      sentenceFromTo: Sentence
+    ) => {
+      return (
+        currentTime > timeToNumber(sentenceFromTo.from).time_number &&
+        currentTime < timeToNumber(sentenceFromTo.to).time_number
+      );
+    };
+    // 字幕表示用のDOMのtextContentを変更する
+    const setSubtitleIntoTextContent = (
+      videoElement: any,
+      translatedSentences: Sentence[]
+    ) => {
+      const currentTime = (videoElement as any).currentTime;
+      // 前回一致した範囲内にcurrentTimeが、ある場合はリターン
+      if (
+        sentenceFromTo &&
+        checkCurrentTimeWithinRange(currentTime, sentenceFromTo)
+      )
+        return;
+      sentenceFromTo = translatedSentences.find((ts: Sentence) =>
+        checkCurrentTimeWithinRange(currentTime, ts)
+      );
+      if (sentenceFromTo) {
+        subtitle_div.textContent = sentenceFromTo.sentence;
+      } else {
+        subtitle_div.textContent = "";
+      }
+    };
+    // 初回の字幕表示
+    setSubtitleIntoTextContent(videoElem, translatedSentences);
+    // 動画の再生時間が変化するたびに字幕表示を行う関数を実行する
+    videoElem.addEventListener("timeupdate", () => {
+      setSubtitleIntoTextContent(videoElem, translatedSentences);
+    });
+  };
+
+  const displayJapaneseSubtitlesForVideo = async () => {
+    const translatedSentences = await getJapaneseStructuredVtt();
+    if (!translatedSentences) throw Error("日本語字幕データの取得に失敗");
+    const [videoElem, subtitleWrapper] =
+      await getCurrentLectureVideoContainer();
+    const subtitle_div = insertDivElementToElement(subtitleWrapper);
+    displaySubtitlesBasedOnCurrentTime(
+      videoElem,
+      subtitle_div,
+      translatedSentences
+    );
+  };
+
+  await displayJapaneseSubtitlesForVideo();
+  console.log("called displayJapaneseSubtitlesForVideo()");
+  // displayJapaneseSubtitlesForVideoを短いスパンで連続して呼ぶのを防止する
+  let lastCallDisplayJapaneseSubtitlesForVideoMethodTime = new Date();
+
+  const isString = (value: any) => {
+    return typeof value === "string" || value instanceof String ? true : false;
+  };
+
+  let videoId = "";
+  const observer = new MutationObserver(async function (mutationsList) {
+    for (const mutation of mutationsList) {
+      const addedNodes = mutation.addedNodes;
+      if (addedNodes.length !== 1) return;
+      const addedNodeId = (addedNodes[0] as any).id;
+      if (
+        addedNodes.length === 1 &&
+        isString((addedNodes[0] as any)?.id) &&
+        addedNodeId.indexOf("playerId") !== -1
+      ) {
+        if (videoId === addedNodeId) return;
+        videoId = addedNodeId;
+        // new Date().getTime() [ms]
+        if (
+          new Date().getTime() -
+            lastCallDisplayJapaneseSubtitlesForVideoMethodTime.getTime() <
+          500
+        ) {
+          throw Error("大量のリクエストを送信しようとしている可能性がある");
+        }
+        await displayJapaneseSubtitlesForVideo();
+        console.log("called displayJapaneseSubtitlesForVideo()");
+        lastCallDisplayJapaneseSubtitlesForVideoMethodTime = new Date();
+      }
+    }
+  });
+  observer.observe(document, { childList: true, subtree: true });
+  console.log("active Observer");
 };
 
 const translate_vtt_data = async (
@@ -459,8 +625,6 @@ const translate_vtt_data = async (
     subtitleSplitByLineAndRemovedEmptyCharAndIndexNumber =
       subtitleSplitByLineAndRemovedEmptyChar;
   }
-
-  // subtitleSplitByLineAndRemovedEmptyCharAndIndexNumberをDeepLに突っ込む
 
   const subtitles_array: Subtitle[] = [];
   for (
@@ -536,12 +700,12 @@ const translate_vtt_data = async (
   const lid = lectureId || get_args_lecture_id();
   const jsonRef = ref(storage, `${cid}/${lid}.json`);
 
+  let translatedSentences = null;
   try {
     // JSONから翻訳データを取得する
     const url = await getDownloadURL(jsonRef);
     const response = await fetch(url);
     const reader = response.body?.getReader();
-    let data = null;
     while (true) {
       if (!reader) continue;
       const result = await reader.read();
@@ -549,7 +713,7 @@ const translate_vtt_data = async (
         break;
       } else {
         const decoder = new TextDecoder();
-        data = JSON.parse(decoder.decode(result.value));
+        translatedSentences = JSON.parse(decoder.decode(result.value));
       }
     }
   } catch (error: any) {
@@ -557,9 +721,11 @@ const translate_vtt_data = async (
       // JSONが存在しないこと以外のエラー
       throw Error(error);
     } else {
-      // // DeepLで翻訳する
-      const translatedSentences: Sentence[] =
-        await translate_text_by_deepl_website(arrayPerSentence);
+      // DeepLで翻訳する
+      console.log("DeepLで翻訳する");
+      translatedSentences = await translate_text_by_deepl_website(
+        arrayPerSentence
+      );
       if (translatedSentences.length !== arrayPerSentence.length)
         throw Error("英 => 日で文章の対応関係が正しくない");
       // Cloud StorageにJSONを保存
@@ -569,6 +735,8 @@ const translate_vtt_data = async (
       console.log("Uploaded a blob or file!");
     }
   }
+
+  return translatedSentences;
 };
 
 const translate_text_by_deepl_website = async (
@@ -580,6 +748,9 @@ const translate_text_by_deepl_website = async (
   return res.data.translatedSentences;
 };
 
+// 200. Redux Thunk Into Saga(2365628/15234818.json)から、250. Context Consumer + useContext Hook(2365628/15283028.json)
+// 286. useCallback(2365628/15392102.json)から、378. AMA - 100,000 Students!!(2365628/16029784.json)までが
+// ほぼ429エラーでDeepLで翻訳できていない
 const translate_all_vtt_data = async () => {
   // 字幕データのダウンロード
   let course_id = get_args_course_id(); // URLからコースIDを取得
@@ -597,11 +768,39 @@ const translate_all_vtt_data = async () => {
         lecture_id_from_fetched_data
       ); // レクチャーidでレクチャータイトルを検索する
       await sleep(1000);
-      // 複数の言語の字幕データが入ってくるので、data.asset.captions.lengthが1以上になることもある
+      // // 複数の言語の字幕データが入ってくるので、data.asset.captions.lengthが1以上になることもある
       const captions_en = data.asset.captions.find(
         (caption: any) => caption.video_label.indexOf("英語") !== -1
       );
       if (!captions_en || !captions_en.url) continue;
+
+      // 翻訳に失敗したレクチャー探す用
+      // const jsonRef = ref(storage, `${course_id}/${lecture_id}.json`);
+      // const url = await getDownloadURL(jsonRef);
+      // const response = await fetch(url);
+      // const reader = response.body?.getReader();
+      // let translatedSentences = null;
+      // console.log(lecture_title);
+      // while (true) {
+      //   if (!reader) continue;
+      //   const result = await reader.read();
+      //   if (result.done) {
+      //     break;
+      //   } else {
+      //     const decoder = new TextDecoder();
+      //     try {
+      //       translatedSentences = JSON.parse(decoder.decode(result.value));
+      //     } catch {
+      //       console.log(`${course_id}/${lecture_id}.json`);
+      //     }
+      //   }
+      // }
+      // // 一つでもsentenceがfalsyなのがあればアウト
+      // if (translatedSentences.some((ts: Sentence) => !ts.sentence)) {
+      //   console.log(`${course_id}/${lecture_id}.json`);
+      // }
+
+      await sleep(1000);
       // 字幕データのダウンロード
       const url = captions_en.url;
       const response = await fetch(url);
@@ -626,6 +825,6 @@ const translate_all_vtt_data = async () => {
 
 // inject_our_script();
 
-// translate_current_lecture();
+translate_current_lecture();
 
 // translate_all_vtt_data();
