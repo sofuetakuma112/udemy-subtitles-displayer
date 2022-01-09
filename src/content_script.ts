@@ -736,18 +736,6 @@ const translate_vtt_data = async (
     // JSONから翻訳データを取得する
     const url = await getDownloadURL(jsonRef);
     translatedStructuredVtt = await fetch(url).then((res) => res.json());
-    // const reader = response.body?.getReader();
-    // while (true) {
-    //   if (!reader) continue;
-    //   const result = await reader.read();
-    //   if (result.done) {
-    //     break;
-    //   } else {
-    //     const decoder = new TextDecoder();
-    //     translatedStructuredVtt = JSON.parse(decoder.decode(result.value));
-    //   }
-    //   await sleep(500)
-    // }
   } catch (error: any) {
     if (error.message.indexOf("storage/object-not-found") === -1) {
       // JSONが存在しないこと以外のエラー
