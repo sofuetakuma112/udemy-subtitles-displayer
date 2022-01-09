@@ -1,8 +1,8 @@
 /* 1. expressモジュールをロードし、インスタンス化してappに代入。*/
-var express = require("express");
-const cors = require("cors");
+import express from "express";
+import cors from "cors";
 var app = express();
-const puppeteer = require("puppeteer");
+import puppeteer from "puppeteer";
 
 app.use(cors());
 app.use(express.json()); // body-parser settings
@@ -121,27 +121,22 @@ app.post("/api/translate", async (req, res, next) => {
   console.log("loading page ...");
   await sleep(5000);
 
-  // const subtitle_byte = fs.readFileSync(`./52. React and ReactDOM.vtt`);
-  // const subtitle_utf = new TextDecoder().decode(subtitle_byte);
-  // // vttをSentence[]に変換
-  // const sentenceArray = vtt2SntenceArray(subtitle_utf);
-
   // Sentence[]からsentenceのみを取り出し配列に格納する
-  const sentenceArray = req.body.data;
-  const sentences = sentenceArray.map(
-    (sentenceAndFromTo) => sentenceAndFromTo.sentence
+  const structuredVtt = req.body.data;
+  const sentences_en = structuredVtt.map(
+    (sentenceAndFromTo) => sentenceAndFromTo.sentence_en
   );
 
   // 5000文字ごとに区切る
   const LIMIT = 4998;
   let batchText_en = "";
   const batchTexts_en = [];
-  sentences.forEach((sentence, index) => {
+  sentences_en.forEach((sentence, index) => {
     const nextTotalLength = batchText_en.length + sentence.length;
     if (nextTotalLength < LIMIT) {
       // まだ現在のbatchText_enに追加できる
-      if (index === sentences.length - 1) {
-        // sentencesのラストのsentence
+      if (index === sentences_en.length - 1) {
+        // sentences_enの末尾要素
         batchText_en += `${sentence}\n\n`;
         batchTexts_en.push(batchText_en);
         batchText_en = "";
@@ -151,9 +146,15 @@ app.post("/api/translate", async (req, res, next) => {
     } else {
       batchTexts_en.push(batchText_en);
       batchText_en = `${sentence}\n\n`;
+      if (index === sentences_en.length - 1) {
+        // sentences_enの末尾要素
+        batchTexts_en.push(batchText_en);
+        batchText_en = "";
+      }
     }
   });
 
+  // バッチテキストの末尾から\n\nを取り除く
   const batchTextsRemovedEndNewlineChar_en = batchTexts_en.map((batchText) =>
     batchText.slice(0, batchText.length - 2)
   );
@@ -192,15 +193,16 @@ app.post("/api/translate", async (req, res, next) => {
 
   const sentences_ja = batchText_ja.split("\n").filter((line) => line);
 
-  const sentenceArray_ja = sentenceArray.map((sentenceAndFromTo, index) => ({
+  const structuredVtt_ja = structuredVtt.map((sentenceAndFromTo, index) => ({
     from: sentenceAndFromTo.from,
     to: sentenceAndFromTo.to,
-    sentence: sentences_ja[index],
+    sentence_en: sentenceAndFromTo.sentence_en,
+    sentence_ja: sentences_ja[index],
   }));
 
   await browser.close();
 
   res.status(200).send({
-    translatedSentences: sentenceArray_ja,
+    translatedSentences: structuredVtt_ja,
   });
 });

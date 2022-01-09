@@ -1,7 +1,5 @@
 import axios from "axios";
-import { db, functions, storage } from "./firebase";
-import { collection, doc, getDoc, setDoc } from "firebase/firestore";
-import { httpsCallable } from "firebase/functions";
+import { storage } from "./firebase";
 import { ref, uploadBytes, getDownloadURL, listAll } from "firebase/storage";
 
 type Subtitle = {
@@ -13,13 +11,21 @@ type Subtitle = {
 type Sentence = {
   from: string;
   to: string;
-  sentence: string;
+  sentence_en: string;
+  sentence_ja?: string;
 };
 
 const timeToNumber = (time: string) => {
-  const minute = time.split(":")[0];
-  const second = time.split(":")[1].split(".")[0];
-  const millisecond = time.split(":")[1].split(".")[1];
+  let timeFormatted = "";
+  // HACK: 一時間超えのレクチャーの場合に正しく動作しない
+  if (time.match(/^\d{2}\:\d{2}\:\d{2}\.\d{3}$/)) {
+    // xx:xx:xx.xxxの形式
+    // 先頭のxx:を消す
+    timeFormatted = time.slice(3, time.length);
+  } else timeFormatted = time;
+  const minute = timeFormatted.split(":")[0];
+  const second = timeFormatted.split(":")[1].split(".")[0];
+  const millisecond = timeFormatted.split(":")[1].split(".")[1];
   return {
     minute: Number(minute),
     second: Number(second),
@@ -28,6 +34,24 @@ const timeToNumber = (time: string) => {
       Number(minute) * 60 + Number(second) + 0.001 * Number(millisecond),
     time_string: time,
   };
+};
+
+// テキストから<>を取り除く
+const removeTag = (text: string) => {
+  return text.replace(/<("[^"]*"|'[^']*'|[^'">])*>/g, "");
+};
+
+const removeLineChar = (time: string) => {
+  try {
+    return time.replace(" line:15%", "");
+  } catch (error: any) {
+    console.log(time);
+    throw Error(error);
+  }
+};
+
+const isString = (value: any) => {
+  return typeof value === "string" || value instanceof String ? true : false;
 };
 
 const sleep = (ms: number) => {
@@ -277,13 +301,6 @@ async function get_lecture_title_by_id(id: string) {
   } else {
     throw Error("lectureIdが一致するレクチャーがコース内になかった");
   }
-  // for (let i = 0; i < lectures.length; i++) {
-  //   const lecture = lectures[i];
-  //   if (lecture._class == "lecture" && lecture.id == id) {
-  //     let name = `${lecture.object_index}. ${lecture.title}`;
-  //     return name;
-  //   }
-  // }
 }
 
 // コース全体のデータを取得する
@@ -382,8 +399,8 @@ async function get_course_lecture_number() {
 }
 
 const translate_current_lecture = async () => {
-  // 現在のページのレクチャーのvttデータを取得する
-  const getCurrentLectureVtt = async () => {
+  // 現在のページのレクチャーの字幕情報を取得する
+  const getEnglishSubtitlesInfoForCurrentLecture = async () => {
     // chrome.devtools.network等から字幕データのURLを取得する
     let dom = null;
     while (!dom) {
@@ -399,10 +416,18 @@ const translate_current_lecture = async () => {
 
     // 複数の言語の字幕データが入ってくるので、data.asset.captions.lengthが1以上になることもある
     const captions_en = data.asset.captions.find(
-      (caption: any) => caption.video_label.indexOf("英語") !== -1
+      (caption: any) => caption.video_label === "英語"
+    );
+    const captions_en_auto = data.asset.captions.find(
+      (caption: any) => caption.video_label === "英語 [自動]"
     );
     if (!lecture_title) throw Error("lecture_title is null");
-    if (!captions_en) return; // 文字のみのレクチャー or 英語字幕がないレクチャーはここで返す
+    // if (!captions_en) return; // 文字のみのレクチャー or 英語字幕がないレクチャーはここで返す
+    return captions_en ? captions_en : captions_en_auto;
+  };
+
+  // 現在のページのレクチャーのvttデータを取得する
+  const getCurrentLectureVtt = async (captions_en: any) => {
     const subtitleUrl = captions_en.url;
 
     // 字幕データのURLから字幕データを取得する
@@ -439,32 +464,20 @@ const translate_current_lecture = async () => {
   };
 
   // Storage or getCurrentLectureVtt + translate_vtt_data で日本語の構造化されたvttを取得する
-  const getJapaneseStructuredVtt = async () => {
+  const getJapaneseStructuredVtt = async (captions_en: any) => {
     // Cloud StorageにJSONがあるか問い合わせる
     const jsonRef = ref(
       storage,
-      `${get_args_course_id()}/${get_args_lecture_id()}.json`
+      `ja/${get_args_course_id()}/${get_args_lecture_id()}.json`
     );
     let translatedSentences: Sentence[] | null = null;
     try {
       // JSONから翻訳データを取得する
       const url = await getDownloadURL(jsonRef);
-      const response = await fetch(url);
-      const reader = response.body?.getReader();
-      while (true) {
-        if (!reader) continue;
-        const result = await reader.read();
-        if (result.done) {
-          break;
-        } else {
-          const decoder = new TextDecoder();
-          translatedSentences = JSON.parse(decoder.decode(result.value));
-        }
-        await sleep(250);
-      }
+      translatedSentences = await fetch(url).then((res) => res.json());
     } catch {
       // JSONがない
-      const vtt = await getCurrentLectureVtt();
+      const vtt = await getCurrentLectureVtt(captions_en);
       if (!vtt) throw Error("vttデータの取得に失敗");
       translatedSentences = await translate_vtt_data(vtt);
     }
@@ -536,8 +549,8 @@ const translate_current_lecture = async () => {
       sentenceFromTo = translatedSentences.find((ts: Sentence) =>
         checkCurrentTimeWithinRange(currentTime, ts)
       );
-      if (sentenceFromTo) {
-        subtitle_div.textContent = sentenceFromTo.sentence;
+      if (sentenceFromTo && sentenceFromTo.sentence_ja) {
+        subtitle_div.textContent = sentenceFromTo.sentence_ja;
       } else {
         subtitle_div.textContent = "";
       }
@@ -551,7 +564,9 @@ const translate_current_lecture = async () => {
   };
 
   const displayJapaneseSubtitlesForVideo = async () => {
-    const translatedSentences = await getJapaneseStructuredVtt();
+    const captions_en = await getEnglishSubtitlesInfoForCurrentLecture();
+    if (!captions_en) return;
+    const translatedSentences = await getJapaneseStructuredVtt(captions_en);
     if (!translatedSentences) throw Error("日本語字幕データの取得に失敗");
     const [videoElem, subtitleWrapper] =
       await getCurrentLectureVideoContainer();
@@ -563,14 +578,10 @@ const translate_current_lecture = async () => {
     );
   };
 
+  console.log("calling displayJapaneseSubtitlesForVideo()");
   await displayJapaneseSubtitlesForVideo();
-  console.log("called displayJapaneseSubtitlesForVideo()");
   // displayJapaneseSubtitlesForVideoを短いスパンで連続して呼ぶのを防止する
   let lastCallDisplayJapaneseSubtitlesForVideoMethodTime = new Date();
-
-  const isString = (value: any) => {
-    return typeof value === "string" || value instanceof String ? true : false;
-  };
 
   let videoId = "";
   const observer = new MutationObserver(async function (mutationsList) {
@@ -593,8 +604,8 @@ const translate_current_lecture = async () => {
         ) {
           throw Error("大量のリクエストを送信しようとしている可能性がある");
         }
+        console.log("calling displayJapaneseSubtitlesForVideo()");
         await displayJapaneseSubtitlesForVideo();
-        console.log("called displayJapaneseSubtitlesForVideo()");
         lastCallDisplayJapaneseSubtitlesForVideoMethodTime = new Date();
       }
     }
@@ -603,45 +614,60 @@ const translate_current_lecture = async () => {
   console.log("active Observer");
 };
 
-const translate_vtt_data = async (
-  vtt: string,
-  courseId: string = "",
-  lectureId: string = ""
-) => {
-  const subtitleSplitByLine = vtt.split("\n").filter((line) => line);
+// テキスト形式のvttを{ from, to, sentence }型の構造化されたものに変換する
+const convertToStructuredVtt = (vtt: string) => {
+  const subtitleSplitByLine = vtt
+    .split("\n")
+    .map((line) => line.trim())
+    .filter((line) => line && line !== "\r");
+  // WEBVTTの文言を削除
   const subtitleSplitByLineAndRemovedEmptyChar = subtitleSplitByLine.slice(
     1,
     subtitleSplitByLine.length
   );
 
-  let subtitleSplitByLineAndRemovedEmptyCharAndIndexNumber = [];
+  // timestamp上にindex番号がある場合、除去する
+  let sentenceAndTimestampList = [];
   if (Number.isInteger(Number(subtitleSplitByLineAndRemovedEmptyChar[0]))) {
     // timestampの上にindexが存在するタイプのvtt
-    subtitleSplitByLineAndRemovedEmptyCharAndIndexNumber =
-      subtitleSplitByLineAndRemovedEmptyChar.filter(
-        (line, index) => index % 3 !== 0
-      );
+    sentenceAndTimestampList = subtitleSplitByLineAndRemovedEmptyChar.filter(
+      (line, index) => index % 3 !== 0
+    );
   } else {
-    subtitleSplitByLineAndRemovedEmptyCharAndIndexNumber =
-      subtitleSplitByLineAndRemovedEmptyChar;
+    sentenceAndTimestampList = subtitleSplitByLineAndRemovedEmptyChar;
   }
 
+  // 改行された文を結合する
+  const isTimestamp = (text: string) => text.indexOf(" --> ") !== -1;
+  const mergedNewlineSentences: string[] = [];
+  let text = "";
+  sentenceAndTimestampList.forEach((line, index) => {
+    const isTimeStamp = isTimestamp(line);
+    if (isTimeStamp) {
+      if (text) {
+        mergedNewlineSentences.push(text.trim());
+        text = "";
+      }
+      mergedNewlineSentences.push(line);
+    } else {
+      text += `${line} `;
+      if (sentenceAndTimestampList.length === index + 1) {
+        // 最後の要素なのでtextをmergedNewlineSentencesにpushする
+        mergedNewlineSentences.push(text.trim());
+        text = "";
+      }
+    }
+  });
+
+  // { from, to, sentence }に構造化する
   const subtitles_array: Subtitle[] = [];
-  for (
-    let i = 0;
-    i < subtitleSplitByLineAndRemovedEmptyCharAndIndexNumber.length / 2;
-    i++
-  ) {
-    const timeAndSubtitle =
-      subtitleSplitByLineAndRemovedEmptyCharAndIndexNumber.slice(
-        i * 2,
-        i * 2 + 2
-      );
+  for (let i = 0; i < mergedNewlineSentences.length / 2; i++) {
+    const timeAndSubtitle = mergedNewlineSentences.slice(i * 2, i * 2 + 2);
     const time = timeAndSubtitle[0];
-    const subtitle = timeAndSubtitle[1];
+    const subtitle = removeTag(timeAndSubtitle[1]).replace("\r", "");
     const fromTo = time.split(" --> ");
     const from = fromTo[0];
-    const to = fromTo[1];
+    const to = removeLineChar(fromTo[1]).replace("\r", "");
     subtitles_array.push({
       from,
       to,
@@ -649,11 +675,12 @@ const translate_vtt_data = async (
     });
   }
 
+  // { from, to, sentence } を纏まりのある文章になるようグルーピングする
   let sentence_array: Subtitle[] = [];
   const sentences_array: Subtitle[][] = [];
   subtitles_array.forEach((subtitle_array) => {
     const endChar = subtitle_array.subtitle[subtitle_array.subtitle.length - 1];
-    if (endChar === "." || endChar === "?") {
+    if (endChar === "." || endChar === "?" || endChar === ")") {
       // 文末がピリオド or ?
       sentence_array.push(subtitle_array);
       sentences_array.push(sentence_array);
@@ -664,18 +691,21 @@ const translate_vtt_data = async (
     }
   });
 
+  // グルーピングしたオブジェクト配列を結合する
   const arrayPerSentence: Sentence[] = [];
   sentences_array.forEach((sentenceArray) => {
     let sentence = "";
     sentenceArray.forEach((subtitleAndFromTo) => {
-      sentence += subtitleAndFromTo.subtitle;
+      // 結合の際、スペース開ける必要があるのでは?
+      sentence += ` ${subtitleAndFromTo.subtitle}`;
     });
+    sentence = sentence.trim();
     if (sentenceArray.length === 1) {
       // 一つで完結した字幕
       arrayPerSentence.push({
         from: sentenceArray[0].from,
         to: sentenceArray[0].to,
-        sentence,
+        sentence_en: sentence,
       });
     } else {
       const firstTime_string = sentenceArray[0].from;
@@ -683,60 +713,75 @@ const translate_vtt_data = async (
       arrayPerSentence.push({
         from: firstTime_string,
         to: endTime_string,
-        sentence,
+        sentence_en: sentence,
       });
     }
   });
 
-  // console.log(
-  //   "このレクチャーの原文の文字数: ",
-  //   arrayPerSentence
-  //     .map((sentenceAndFromTo) => sentenceAndFromTo.sentence)
-  //     .join(" ").length
-  // );
+  return arrayPerSentence;
+};
 
+const translate_vtt_data = async (
+  structuredVtt: any,
+  courseId: string = "",
+  lectureId: string = ""
+) => {
   // Cloud StorageにJSONがあるか問い合わせる
   const cid = courseId || get_args_course_id();
   const lid = lectureId || get_args_lecture_id();
-  const jsonRef = ref(storage, `${cid}/${lid}.json`);
+  const jsonRef = ref(storage, `ja/${cid}/${lid}.json`);
 
-  let translatedSentences = null;
+  let translatedStructuredVtt = null;
   try {
     // JSONから翻訳データを取得する
     const url = await getDownloadURL(jsonRef);
-    const response = await fetch(url);
-    const reader = response.body?.getReader();
-    while (true) {
-      if (!reader) continue;
-      const result = await reader.read();
-      if (result.done) {
-        break;
-      } else {
-        const decoder = new TextDecoder();
-        translatedSentences = JSON.parse(decoder.decode(result.value));
-      }
-    }
+    translatedStructuredVtt = await fetch(url).then((res) => res.json());
+    // const reader = response.body?.getReader();
+    // while (true) {
+    //   if (!reader) continue;
+    //   const result = await reader.read();
+    //   if (result.done) {
+    //     break;
+    //   } else {
+    //     const decoder = new TextDecoder();
+    //     translatedStructuredVtt = JSON.parse(decoder.decode(result.value));
+    //   }
+    //   await sleep(500)
+    // }
   } catch (error: any) {
     if (error.message.indexOf("storage/object-not-found") === -1) {
       // JSONが存在しないこと以外のエラー
+      console.log(`JSONが存在しないこと以外のエラー: ja/${cid}/${lid}.json`);
       throw Error(error);
     } else {
-      // DeepLで翻訳する
-      console.log("DeepLで翻訳する");
-      translatedSentences = await translate_text_by_deepl_website(
-        arrayPerSentence
+      translatedStructuredVtt = await translate_text_by_deepl_website(
+        structuredVtt
       );
-      if (translatedSentences.length !== arrayPerSentence.length)
+      if (translatedStructuredVtt.length !== structuredVtt.length)
         throw Error("英 => 日で文章の対応関係が正しくない");
+
+      // 翻訳後の構造化されたvttが正しく翻訳できているかチェックするのに使う
+      // 一つでもsentenceがfalsyなのがあればアウト
+      if (
+        translatedStructuredVtt.some(
+          (ts: Sentence) => !ts.sentence_en || !ts.sentence_ja
+        )
+      ) {
+        console.log("translatedStructuredVtt", translatedStructuredVtt);
+        console.log(`origin vtt: en/${cid}/${lid}.json`);
+        throw Error("翻訳されたvttのフォーマットが正しくない");
+      }
+      await sleep(1000);
+
       // Cloud StorageにJSONを保存
-      const json = JSON.stringify(translatedSentences);
+      const json = JSON.stringify(translatedStructuredVtt);
       const blob = new Blob([json], { type: "application/json" });
       await uploadBytes(jsonRef, blob);
       console.log("Uploaded a blob or file!");
     }
   }
 
-  return translatedSentences;
+  return translatedStructuredVtt;
 };
 
 const translate_text_by_deepl_website = async (
@@ -748,78 +793,147 @@ const translate_text_by_deepl_website = async (
   return res.data.translatedSentences;
 };
 
-// 200. Redux Thunk Into Saga(2365628/15234818.json)から、250. Context Consumer + useContext Hook(2365628/15283028.json)
-// 286. useCallback(2365628/15392102.json)から、378. AMA - 100,000 Students!!(2365628/16029784.json)までが
-// ほぼ429エラーでDeepLで翻訳できていない
-const translate_all_vtt_data = async () => {
-  // 字幕データのダウンロード
-  let course_id = get_args_course_id(); // URLからコースIDを取得
-  let data = await get_course_data(); // URLから取得したコースIDとCookieから取得した認証情報を元にコース全体のデータを取得する
+const get_all_vtt_data_and_upload_storage = async () => {
+  const course_id = get_args_course_id(); // URLからコースIDを取得
+  const data = await get_course_data(); // URLから取得したコースIDとCookieから取得した認証情報を元にコース全体のデータを取得する
+  const array = data.results.filter(
+    (result: any) => result._class === "lecture"
+  ); // chapter, lecture等が入った配列
   await sleep(1000);
-  let array = data.results; // chapter, lecture等が入った配列
   for await (const result of array) {
-    if (result._class == "lecture") {
-      let lecture_id = result.id;
-      // 引数を渡さなかった（空文字の）場合は、現在のレクチャーとして扱われます
-      const data = await get_lecture_data(course_id, lecture_id); // 現在のレクチャーのデータを取得する
-      await sleep(1000);
-      const lecture_id_from_fetched_data = data.id; // 取得したレクチャーデータから、このレクチャーのidを取得する
-      const lecture_title = await get_lecture_title_by_id(
-        lecture_id_from_fetched_data
-      ); // レクチャーidでレクチャータイトルを検索する
-      await sleep(1000);
-      // // 複数の言語の字幕データが入ってくるので、data.asset.captions.lengthが1以上になることもある
-      const captions_en = data.asset.captions.find(
-        (caption: any) => caption.video_label.indexOf("英語") !== -1
-      );
-      if (!captions_en || !captions_en.url) continue;
+    const lecture_id = result.id;
+    // 引数を渡さなかった（空文字の）場合は、現在のレクチャーとして扱われます
+    const data = await get_lecture_data(course_id, lecture_id); // 現在のレクチャーのデータを取得する
+    await sleep(1000);
 
-      // 翻訳に失敗したレクチャー探す用
-      // const jsonRef = ref(storage, `${course_id}/${lecture_id}.json`);
-      // const url = await getDownloadURL(jsonRef);
-      // const response = await fetch(url);
-      // const reader = response.body?.getReader();
-      // let translatedSentences = null;
-      // console.log(lecture_title);
-      // while (true) {
-      //   if (!reader) continue;
-      //   const result = await reader.read();
-      //   if (result.done) {
-      //     break;
-      //   } else {
-      //     const decoder = new TextDecoder();
-      //     try {
-      //       translatedSentences = JSON.parse(decoder.decode(result.value));
-      //     } catch {
-      //       console.log(`${course_id}/${lecture_id}.json`);
-      //     }
-      //   }
-      // }
-      // // 一つでもsentenceがfalsyなのがあればアウト
-      // if (translatedSentences.some((ts: Sentence) => !ts.sentence)) {
-      //   console.log(`${course_id}/${lecture_id}.json`);
-      // }
+    const lecture_id_from_fetched_data = data.id; // 取得したレクチャーデータから、このレクチャーのidを取得する
+    const lecture_title = await get_lecture_title_by_id(
+      lecture_id_from_fetched_data
+    ); // レクチャーidでレクチャータイトルを検索する
+    await sleep(1000);
 
-      await sleep(1000);
-      // 字幕データのダウンロード
-      const url = captions_en.url;
-      const response = await fetch(url);
-      const reader = response.body?.getReader();
-      let vtt = "";
-      while (true) {
-        if (!reader) continue;
-        const result = await reader.read();
-        if (result.done) {
-          break;
-        } else {
-          const decoder = new TextDecoder();
-          vtt += decoder.decode(result.value);
-        }
-      }
-      console.log(`${lecture_title}の字幕データを日本語に翻訳する`);
-      await translate_vtt_data(vtt, course_id, lecture_id);
-      sleep(5000);
+    // 複数の言語の字幕データが入ってくるので、data.asset.captions.lengthが1以上になることもある
+    const captions_en = data.asset.captions.find(
+      (caption: any) => caption.video_label === "英語"
+    );
+    const captions_en_auto = data.asset.captions.find(
+      (caption: any) => caption.video_label === "英語 [自動]"
+    );
+    if (
+      (!captions_en || !captions_en.url) &&
+      (!captions_en_auto || !captions_en_auto.url)
+    ) {
+      // 英語字幕が存在しないレクチャー
+      continue;
     }
+
+    console.log(lecture_title, "\n", `en/${course_id}/${lecture_id}.json`);
+
+    // 字幕データのダウンロード
+    const url = captions_en?.url || captions_en_auto?.url;
+    const response = await fetch(url);
+    const reader = response.body?.getReader();
+    let vtt = "";
+    while (true) {
+      if (!reader) continue;
+      const result = await reader.read();
+      if (result.done) {
+        break;
+      } else {
+        const decoder = new TextDecoder();
+        vtt += decoder.decode(result.value);
+      }
+      await sleep(250);
+    }
+    const structuredVtt = convertToStructuredVtt(vtt);
+    // バリデーション
+    structuredVtt.forEach(({ from, to, sentence_en }) => {
+      const isOk =
+        (from.match(/^\d{2}\:\d{2}\:\d{2}\.\d{3}$/) ||
+          from.match(/^\d{2}\:\d{2}\.\d{3}$/)) &&
+        (to.match(/^\d{2}\:\d{2}\:\d{2}\.\d{3}$/) ||
+          to.match(/^\d{2}\:\d{2}\.\d{3}$/)) &&
+        sentence_en &&
+        isString(sentence_en);
+      if (!isOk) {
+        console.log("該当箇所", { from, to, sentence_en });
+        console.log("structuredVtt", structuredVtt);
+        throw Error("正しくvttを構造化出来ていない");
+      } else return isOk;
+    });
+
+    // storageに保存
+    const jsonRef = ref(storage, `en/${course_id}/${lecture_id}.json`);
+    const json = JSON.stringify(structuredVtt);
+    const blob = new Blob([json], { type: "application/json" });
+    await uploadBytes(jsonRef, blob);
+    console.log("Uploaded a blob or file!");
+  }
+};
+
+const translate_all_vtt_data = async () => {
+  const course_id = get_args_course_id(); // URLからコースIDを取得
+  const course_data = await get_course_data(); // URLから取得したコースIDとCookieから取得した認証情報を元にコース全体のデータを取得する
+  const videoLectures = course_data.results.filter(
+    (result: any) =>
+      result._class === "lecture" && result.asset.asset_type === "Video"
+  ); // video形式のレクチャー情報のみ取り出す
+
+  const listRef = ref(storage, `ja/${course_id}`);
+  const translatedLectureIds = await listAll(listRef)
+    .then((res) => {
+      const lectureIds: number[] = [];
+      res.items.forEach((itemRef) => {
+        lectureIds.push(Number(itemRef.name.replace(/\.[^/.]+$/, "")));
+      });
+      return lectureIds;
+    })
+    .catch((error) => {
+      throw Error(error);
+    });
+  const restOfLectures = videoLectures.filter(
+    (lecture: any) => !translatedLectureIds.includes(lecture.id)
+  );
+  await sleep(1000);
+  for await (const result of restOfLectures) {
+    const lecture_id = result.id;
+    // 引数を渡さなかった（空文字の）場合は、現在のレクチャーとして扱われます
+    const data = await get_lecture_data(course_id, lecture_id);
+    await sleep(1000);
+
+    // 英語字幕が存在しないレクチャーはスキップする
+    const captions_en = data.asset.captions.find(
+      (caption: any) => caption.video_label === "英語"
+    );
+    const captions_en_auto = data.asset.captions.find(
+      (caption: any) => caption.video_label === "英語 [自動]"
+    );
+    if (
+      (!captions_en || !captions_en.url) &&
+      (!captions_en_auto || !captions_en_auto.url)
+    ) {
+      // 英語字幕が存在しないレクチャー
+      continue;
+    }
+
+    const jsonRef = ref(storage, `en/${course_id}/${lecture_id}.json`);
+    let structuredVtt = null;
+    try {
+      // JSONから翻訳データを取得する
+      const url = await getDownloadURL(jsonRef);
+      structuredVtt = await fetch(url).then((res) => res.json());
+    } catch (error: any) {
+      throw Error(error);
+    }
+
+    const lecture_id_from_fetched_data = data.id; // 取得したレクチャーデータから、このレクチャーのidを取得する
+    const lecture_title = await get_lecture_title_by_id(
+      lecture_id_from_fetched_data
+    ); // レクチャーidでレクチャータイトルを検索する
+    await sleep(1000);
+    console.log(`${lecture_title}の字幕データを日本語に翻訳する`);
+    await translate_vtt_data(structuredVtt, course_id, lecture_id);
+    sleep(1000);
   }
 };
 
@@ -828,3 +942,5 @@ const translate_all_vtt_data = async () => {
 translate_current_lecture();
 
 // translate_all_vtt_data();
+
+// get_all_vtt_data_and_upload_storage();
