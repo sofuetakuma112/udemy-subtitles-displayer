@@ -58,152 +58,6 @@ const sleep = (ms: number) => {
   return new Promise((resolve) => setTimeout(resolve, ms));
 };
 
-// グローバル変数
-let div = document.createElement("div"); // すべての要素はここに入る
-let button1 = document.createElement("button"); // このレクチャーの字幕をダウンロードする（1つの.vttファイル）
-let button2 = document.createElement("button"); // コース全体の字幕をダウンロードする（複数の.vttファイル）
-let button3 = document.createElement("button"); // このビデオレクチャーをダウンロードする
-let title_element: Node | any = null; // ページ左上のタイトル表示
-
-// UI要素のページへの配置
-async function inject_our_script() {
-  // https://greasyfork.org/en/scripts/422576-udemy-subtitle-downloader-v3/discussions/110421
-  // title_element = document.querySelector(
-  //   'a[data-purpose="course-header-title"]'
-  // );
-  while (!title_element) {
-    title_element = document.querySelector(
-      '[data-purpose="course-header-title"]'
-    );
-    await sleep(1000);
-  }
-
-  let button1_css = `
-    font-size: 14px;
-    padding: 1px 12px;
-    border-radius: 4px;
-    border: none;
-    color: black;
-  `;
-
-  let button2_css = `
-    font-size: 14px;
-    padding: 1px 12px;
-    border-radius: 4px;
-    border: none;
-    color: black;
-    margin-left: 8px;
-  `;
-
-  let div_css = `
-    margin-bottom: 10px;
-    display: flex;
-  `;
-
-  button1.setAttribute("style", button1_css);
-  button1.textContent = "このレクチャーの字幕をダウンロードする";
-  button1.addEventListener("click", download_lecture_subtitle);
-
-  button2.setAttribute("style", button2_css);
-  let num = await get_course_lecture_number();
-  button2.textContent = `全コースの字幕をダウンロードする(${num}ドキュメント)`;
-  button2.addEventListener("click", download_course_subtitle);
-
-  button3.setAttribute("style", button2_css);
-  button3.textContent = "このビデオレクチャーをダウンロードする";
-  button3.addEventListener("click", download_lecture_video);
-
-  div.setAttribute("style", div_css);
-  div.appendChild(button1);
-  div.appendChild(button2);
-  div.appendChild(button3);
-
-  insertAfter(div, title_element);
-}
-
-// このレクチャーの字幕をダウンロードする
-async function download_lecture_subtitle() {
-  await parse_lecture_data();
-}
-
-// 現在のレクチャーの字幕をダウンロードする
-// how to call: await parse_lecture_data();
-// ダウンロードし、.vtt字幕を取得します。
-async function parse_lecture_data(
-  course_id: string = "",
-  lecture_id: string = ""
-) {
-  // 引数を渡さなかった（空文字の）場合は、現在のレクチャーとして扱われます
-  const data = await get_lecture_data(course_id, lecture_id); // 現在のレクチャーのデータを取得する
-  const lecture_id_from_fetched_data = data.id; // 取得したレクチャーデータから、このレクチャーのidを取得する
-  const lecture_title = await get_lecture_title_by_id(
-    lecture_id_from_fetched_data
-  ); // レクチャーidでレクチャータイトルを検索する
-
-  // 複数の言語の字幕データが入ってくるので、data.asset.captions.lengthが1以上になることもある
-  const captions_en = data.asset.captions.find(
-    (caption: any) => caption.video_label.indexOf("英語") !== -1
-  );
-  if (!lecture_title) throw Error("lecture_title is null");
-  if (!captions_en) return; // 文字のみのレクチャー or 英語字幕がないレクチャーはここで返す
-  let filename = `${safe_filename(lecture_title)}.vtt`; // ファイル名の構成
-  save_vtt(captions_en.url, filename); // 直接保存
-}
-
-// コースのすべての字幕をダウンロードする
-async function download_course_subtitle() {
-  let course_id = get_args_course_id(); // URLからコースIDを取得
-  let data = await get_course_data(); // URLから取得したコースIDとCookieから取得した認証情報を元にコース全体のデータを取得する
-  let array = data.results; // レクチャー配列
-  for (let i = 0; i < array.length; i++) {
-    const result = array[i];
-    if (result._class == "lecture") {
-      let lecture_id = result.id;
-      await parse_lecture_data(course_id, lecture_id);
-      await sleep(2000);
-    }
-  }
-}
-
-// このビデオレクチャーをダウンロードする
-async function download_lecture_video() {
-  button3.textContent = "このビデオをダウンロードする（ダウンロード開始）";
-  let data = await get_lecture_data(); // 現在のレクチャーのデータを取得する
-  let lecture_id = data.id; // このレクチャーのidを取得する
-  let lecture_title = await get_lecture_title_by_id(lecture_id); // idでタイトルを検索する
-
-  let r = data.asset.media_sources[0];
-  console.log("data", data);
-  // console.log('data.asset.media_sources', data.asset.media_sources)
-  // r => {
-  //   type: "application/x-mpegURL",
-  //   src: "https://www.udemy.com/assets/18738176/encrypted-files/out/v1/1c1e0dfe7de744749849c4c3df5e45b3/b6fdc5264b9047629c0ed790b2c7ecd3/b4ad6e003a0e45bd8935a17376a85b0a/index.m3u8?token=eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.eyJwYXRoIjoib3V0L3YxLzFjMWUwZGZlN2RlNzQ0NzQ5ODQ5YzRjM2RmNWU0NWIzL2I2ZmRjNTI2NGI5MDQ3NjI5YzBlZDc5MGIyYzdlY2QzL2I0YWQ2ZTAwM2EwZTQ1YmQ4OTM1YTE3Mzc2YTg1YjBhLyIsImV4cCI6MTY0MTQ5ODUwMX0.J6sGQg8l_JOeb4PxVOX6pPe6ArsQ4LCs98jxfnYROnU&provider=cloudfront&v=1",
-  //   label: "auto",
-  // };
-
-  let url = r.src;
-  let resolution = 1080; // r.label;
-  let filename = `${safe_filename(lecture_title ?? "")}_${resolution}p.mp4`; // 构造文件名
-  let type = r.type; // application/x-mpegURL
-
-  // Response は Fetch API のインターフェイスで、リクエストのレスポンスを表します。
-  fetch(url)
-    .then((res: Response) => res.blob())
-    .then((blob) => {
-      downloadString(blob, type, filename);
-      button3.textContent =
-        "この動画レクチャーをダウンロードする（ダウンロード完了）";
-    });
-}
-
-// あるノードの後に新しいノードを挿入する
-function insertAfter(newNode: any, referenceNode: Node | null) {
-  if (!referenceNode) throw Error("referenceNode is null");
-  if (!referenceNode.parentNode)
-    throw Error("referenceNode.parentNode is null");
-  referenceNode.parentNode.insertBefore(newNode, referenceNode.nextSibling);
-}
-
 // レクチャーのデータを取得する
 function get_lecture_data(
   course_id: string = "",
@@ -244,8 +98,6 @@ function get_lecture_data_url(
   param_course_id: string = "",
   param_lecture_id: string = ""
 ) {
-  // let course_id = '3681012'
-  // let lecture_id = '23665120'
   // let example_url = `https://www.udemy.com/api-2.0/users/me/subscribed-courses/3681012/lectures/23665120/?fields[lecture]=asset,description,download_url,is_free,last_watched_second&fields[asset]=asset_type,length,media_license_token,media_sources,captions,thumbnail_sprite,slides,slide_urls,download_urls`
   let course_id = param_course_id || get_args_course_id(); // HTMLから現在表示しているコースのcourseIdを取得
   let lecture_id = param_lecture_id || get_args_lecture_id(); // URLからlectureIdを取得
@@ -254,20 +106,10 @@ function get_lecture_data_url(
 }
 
 // https://greasyfork.org/en/scripts/422576-udemy-subtitle-downloader-v3/discussions/110421
-// このレクチャーのidを取得する
-// function get_args_lecture_id() {
-//   let json = get_args();
-//   return json.initialCurriculumItemId;
-// }
 function get_args_lecture_id() {
   const result = /(?<=lecture\/)\d*/.exec(document.URL);
   if (!result) return;
   return result[0];
-  // 以下の（？）方法では、
-  // lecture_id は常にページを開いたときと同じレクチャーになり、
-  // 他のサブレクチャーに切り替えても変更されません。
-  // let json = get_args()
-  // return json.initialCurriculumItemId
 }
 
 // コースIDを取得する
@@ -289,7 +131,6 @@ function get_args() {
 
 // idを入力
 // そのセッションのタイトルに戻る
-// await get_lecture_title_by_id(id)
 async function get_lecture_title_by_id(id: string) {
   let data = await get_course_data();
   let lectures = data.results; // コース配下のレクチャー配列
@@ -304,7 +145,6 @@ async function get_lecture_title_by_id(id: string) {
 }
 
 // コース全体のデータを取得する
-// OK
 function get_course_data(): any {
   return new Promise((resolve, reject) => {
     // Udemyでログイン済みのブラウザで実行していることが条件
@@ -333,69 +173,6 @@ function get_course_data_url() {
   // let example_url = "https://www.udemy.com/api-2.0/courses/3681012/subscriber-curriculum-items/?page_size=1400&fields[lecture]=title,object_index,is_published,sort_order,created,asset,supplementary_assets,is_free&fields[quiz]=title,object_index,is_published,sort_order,type&fields[practice]=title,object_index,is_published,sort_order&fields[chapter]=title,object_index,is_published,sort_order&fields[asset]=title,filename,asset_type,status,time_estimation,is_external&caching_intent=True"
   let url = `https://www.udemy.com/api-2.0/courses/${course_id}/subscriber-curriculum-items/?page_size=1400&fields[lecture]=title,object_index,is_published,sort_order,created,asset,supplementary_assets,is_free&fields[quiz]=title,object_index,is_published,sort_order,type&fields[practice]=title,object_index,is_published,sort_order&fields[chapter]=title,object_index,is_published,sort_order&fields[asset]=title,filename,asset_type,status,time_estimation,is_external&caching_intent=True`;
   return url;
-}
-
-// 安全なファイル名への変換
-function safe_filename(string: string) {
-  let s = string;
-  s = s.replace(":", "-");
-  s = s.replace("'", " ");
-  return s;
-}
-
-// vttを保存
-// パラメータ：urlはvttファイルのURL、urlにアクセスするとファイルの内容が表示されるはずです。
-// filenameは保存するファイルの名前です
-function save_vtt(url: string, filename: string) {
-  fetch(url, {})
-    .then((response) => response.text())
-    .then((data) => {
-      downloadString(data, "text/plain", filename);
-    })
-    .catch((e) => {
-      console.log(e);
-    });
-}
-
-// copy from: https://gist.github.com/danallison/3ec9d5314788b337b682
-// Example downloadString(srt, "text/plain", filename);
-function downloadString(
-  text: string | Blob,
-  fileType: string, // application/x-mpegURL
-  fileName: string
-) {
-  // Blobとは、BLOB（Binary Large Object）を扱うためJavaScriptのオブジェクトです。
-  // BlobによってJSでバイナリデータを扱うことが出来る
-  // new Blob(【ファイルの内容の配列】,【ファイルの種類（MIMEタイプ）】);
-  let blob = new Blob([text], {
-    type: fileType,
-  });
-  let a = document.createElement("a");
-  a.download = fileName;
-  a.href = URL.createObjectURL(blob);
-  a.dataset.downloadurl = [fileType, a.download, a.href].join(":");
-  a.style.display = "none";
-  document.body.appendChild(a);
-  a.click();
-  document.body.removeChild(a);
-  setTimeout(function () {
-    URL.revokeObjectURL(a.href);
-  }, 11500);
-}
-
-// ビデオの数を整数で返します。
-async function get_course_lecture_number() {
-  // get_course_data: コース全体のデータを取得する
-  let data = await get_course_data();
-  let array = data.results;
-  let num = 0;
-  for (let i = 0; i < array.length; i++) {
-    const r = array[i];
-    if (r._class == "lecture") {
-      num += 1;
-    }
-  }
-  return num;
 }
 
 const translate_current_lecture = async () => {
@@ -924,8 +701,6 @@ const translate_all_vtt_data = async () => {
     sleep(1000);
   }
 };
-
-// inject_our_script();
 
 translate_current_lecture();
 
