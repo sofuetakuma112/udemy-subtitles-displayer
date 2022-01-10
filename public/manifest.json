@@ -15,7 +15,7 @@
 
   "content_scripts": [
     {
-      "matches": ["https://www.udemy.com/*", "https://www.google.com/*"],
+      "matches": ["https://www.udemy.com/*"],
       "js": ["js/vendor.js", "js/content_script.js"]
     }
   ],

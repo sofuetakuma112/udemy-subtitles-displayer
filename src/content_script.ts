@@ -29,7 +29,7 @@ const removeTag = (text: string) => {
   return text.replace(/<("[^"]*"|'[^']*'|[^'">])*>/g, "");
 };
 
-// " line 15% "を取り除く
+// " line 15%"を取り除く
 const removeLineChar = (time: string) => {
   try {
     return time.replace(" line:15%", "");
