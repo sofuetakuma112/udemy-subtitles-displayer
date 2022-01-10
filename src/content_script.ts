@@ -1,19 +1,7 @@
 import axios from "axios";
 import { storage } from "./firebase";
 import { ref, uploadBytes, getDownloadURL, listAll } from "firebase/storage";
-
-type Subtitle = {
-  from: string;
-  to: string;
-  subtitle: string;
-};
-
-type Sentence = {
-  from: string;
-  to: string;
-  sentence_en: string;
-  sentence_ja?: string;
-};
+import { Subtitle, Sentence } from "./type";
 
 const timeToNumber = (time: string) => {
   let timeFormatted = "";
@@ -41,6 +29,7 @@ const removeTag = (text: string) => {
   return text.replace(/<("[^"]*"|'[^']*'|[^'">])*>/g, "");
 };
 
+// " line 15% "を取り除く
 const removeLineChar = (time: string) => {
   try {
     return time.replace(" line:15%", "");
@@ -50,6 +39,7 @@ const removeLineChar = (time: string) => {
   }
 };
 
+// String型かの判定
 const isString = (value: any) => {
   return typeof value === "string" || value instanceof String ? true : false;
 };
@@ -282,10 +272,11 @@ const translate_current_lecture = async () => {
     const div_css = `
     margin-bottom: 10px;
     display: flex;
-    background-color: #333;
+    background-color: #1c1d1f;
     opacity: 0.75;
-    font-size: 24px;
+    font-size: 2.74rem;
     padding: 0px 20px;
+    color: #fff;
   `;
     const subtitle_div = document.createElement("div");
     subtitle_div.setAttribute("style", div_css);

@@ -1,11 +1,10 @@
 import React, { useEffect, useState } from "react";
 import ReactDOM from "react-dom";
-import { Pair } from "./type";
 
 const Popup = () => {
   const [currentURL, setCurrentURL] = useState<string>();
   const [message, setMessage] = useState<string>("");
-  const [pairs, setPairs] = useState<Pair[]>([]);
+  const [pairs, setPairs] = useState<any[]>([]);
 
   const formatTime = (second: number) => {
     const date = new Date(null as any as number);
@@ -37,7 +36,7 @@ const Popup = () => {
     });
   }, []);
 
-  const changeBackground = (pair: Pair) => {
+  const changeBackground = (pair: any) => {
     chrome.tabs.query({ active: true, currentWindow: true }, function (tabs) {
       const tab = tabs[0];
       if (tab.id) {
