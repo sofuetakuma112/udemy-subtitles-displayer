@@ -1,59 +1,29 @@
-# Translate Udemy subtitles
+環境変数をenvファイル等から読み込むことに対応できていません
 
-Translate Udemy subtitles
+firebaseプロジェクトを新規で作成して
+srcディレクトリ配下に以下の内容で`firebase.ts`という名前のファイルを作成してください
+```ts
+import { initializeApp } from "firebase/app";
+import { getStorage } from "firebase/storage";
 
-## Prerequisites
+const firebaseConfig = {
+  apiKey: "XXXXXXXXXXXXXXXXXXXXXXXXXXXXX",
+  authDomain: "XXXXXXXXXXXXXXXXXXXXXXXXXXXXX",
+  projectId: "XXXXXXXXXXXXXXXXXXXXXXXXXXXXX",
+  storageBucket: "XXXXXXXXXXXXXXXXXXXXXXXXXXXXX",
+  messagingSenderId: "XXXXXXXXXXXXXXXXXXXXXXXXXXXXX",
+  appId: "XXXXXXXXXXXXXXXXXXXXXXXXXXXXX"
+};
 
-* [node + npm](https://nodejs.org/) (Current Version)
+const app = initializeApp(firebaseConfig);
 
-## Option
-
-* [Visual Studio Code](https://code.visualstudio.com/)
-
-## Includes the following
-
-* TypeScript
-* Webpack
-* React
-* Jest
-* Example Code
-    * Chrome Storage
-    * Options Version 2
-    * content script
-    * count up badge number
-    * background
-
-## Setup
-
-```
-npm install
+export const storage = getStorage(app);
 ```
 
-## Import as Visual Studio Code project
+その後
 
-...
+`npm i`
 
-## Build
+`npm run build`
 
-```
-npm run build
-```
-
-## Build in watch mode
-
-### terminal
-
-```
-npm run watch
-```
-
-### Visual Studio Code
-
-Run watch mode.
-
-## Load extension to chrome
-
-Load `dist` directory
-
-## Test
-`npx jest` or `npm run test`
+を実行して生成されるdistディレクトリをChromeの「パッケージ化されていない拡張機能を読み込む」から読み込むことで使用することができます
