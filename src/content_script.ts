@@ -184,10 +184,17 @@ const getEnglishSubtitlesInfoForCurrentLecture = async () => {
 
 /// cloud storageから翻訳済みのJSONを取得
 const getJapaneseStructuredVtt = async () => {
+  const courceId = getArgsCourseId();
+  const lectureId = getArgsLectureId();
+
+  if (!courceId || !lectureId) {
+    throw Error("不正なcourceId, lectureId");
+  }
+
   // Cloud StorageにJSONがあるか問い合わせる
   const jsonRef = ref(
     storage,
-    `ja/${getArgsCourseId()}/${getArgsLectureId()}.json`
+    `${courceId}/${lectureId}/captions_ja_by_sentence.json`
   );
   const url = await getDownloadURL(jsonRef);
   const translatedSentences = await fetch(url).then((res) => res.json());
@@ -281,9 +288,6 @@ const displaySubtitlesBasedOnCurrentTime = (
 };
 
 const displayJapaneseSubtitlesForVideo = async () => {
-  const captions_en = await getEnglishSubtitlesInfoForCurrentLecture();
-  if (!captions_en) return;
-
   const translatedSentences = await getJapaneseStructuredVtt();
   if (!translatedSentences) throw Error("日本語字幕データの取得に失敗");
 
@@ -332,42 +336,6 @@ const displayJaSubtitlesOnCurrentLecture = async () => {
     }
   });
   observer.observe(document, { childList: true, subtree: true });
-};
-
-const createSvg = () => {
-  const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
-  svg.setAttribute("xmlns", "http://www.w3.org/2000/svg");
-  svg.setAttribute("version", "1.0");
-  svg.setAttribute("width", "24.000000pt");
-  svg.setAttribute("height", "24.000000pt");
-  svg.setAttribute("viewBox", "0 0 24.000000 24.000000");
-  svg.setAttribute("preserveAspectRatio", "xMidYMid meet");
-
-  const group = document.createElementNS("http://www.w3.org/2000/svg", "g");
-  group.setAttribute(
-    "transform",
-    "translate(0.000000,24.000000) scale(0.100000,-0.100000)"
-  );
-  group.setAttribute("fill", "#000000");
-  group.setAttribute("stroke", "none");
-
-  const path1 = document.createElementNS("http://www.w3.org/2000/svg", "path");
-  path1.setAttribute(
-    "d",
-    "M2998 9087 c-196 -67 -359 -125 -362 -128 -3 -3 19 -64 50 -135 95 -219 244 -602 244 -626 0 -4 -659 -8 -1465 -8 l-1465 0 0 -340 0 -340 550 0 549 0 9 -37 c156 -649 370 -1180 690 -1713 185 -309 434 -643 678 -907 l85 -92 -168 -99 c-700 -414 -1465 -734 -2233 -934 -85 -22 -156 -41 -157 -42 -2 -2 25 -43 58 -92 85 -124 254 -389 324 -509 32 -55 59 -101 60 -103 3 -4 322 109 497 177 762 295 1423 630 2154 1091 19 12 38 2 206 -103 479 -300 969 -542 1488 -733 79 -29 148 -50 151 -46 4 4 65 156 136 339 l130 331 -161 61 c-436 162 -915 399 -1270 626 l-56 36 97 112 c502 574 865 1186 1122 1890 65 177 153 473 192 644 l24 103 493 0 492 0 0 340 0 340 -1198 0 -1198 0 -31 93 c-17 50 -50 142 -73 202 -24 61 -91 247 -150 415 -65 183 -113 306 -121 307 -8 1 -175 -53 -371 -120z m1367 -1619 c-4 -24 -27 -119 -50 -213 -181 -711 -542 -1356 -1047 -1870 l-148 -150 -98 100 c-434 446 -800 1046 -1017 1669 -48 136 -119 377 -140 474 l-7 32 1257 0 1257 0 -7 -42z"
-  );
-  group.appendChild(path1);
-
-  const path2 = document.createElementNS("http://www.w3.org/2000/svg", "path");
-  path2.setAttribute(
-    "d",
-    "M6930 6888 c-23 -53 -2320 -5849 -2320 -5854 0 -3 174 -4 388 -2 349 4 392 6 437 23 64 24 152 111 186 185 14 30 137 340 274 688 l249 632 1280 0 1281 0 239 -663 c131 -364 249 -680 262 -702 33 -58 101 -120 159 -147 49 -23 57 -23 464 -26 338 -3 413 -1 408 10 -3 7 -526 1325 -1162 2928 -636 1603 -1161 2923 -1166 2933 -9 16 -43 17 -490 17 l-479 0 -10 -22z m540 -1042 c63 -224 106 -343 550 -1521 226 -598 409 -1090 407 -1092 -2 -2 -454 -2 -1003 -1 l-1000 3 383 1015 c477 1263 525 1400 603 1709 6 23 13 41 14 40 2 -2 22 -71 46 -153z"
-  );
-  group.appendChild(path2);
-
-  svg.appendChild(group);
-
-  return svg;
 };
 
 const main = async () => {
