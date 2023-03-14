@@ -4,7 +4,7 @@
   "description": "chrome-extension-sample",
   "main": "index.js",
   "scripts": {
-    "watch": "webpack --config webpack/webpack.dev.js --watch",
+    "watch": "webpack --config webpack/webpack.prod.js --watch",
     "build": "webpack --config webpack/webpack.prod.js",
     "clean": "rimraf dist",
     "test": "npx jest",
@@ -28,6 +28,7 @@
     "@types/react": "^17.0.0",
     "@types/react-dom": "^17.0.0",
     "copy-webpack-plugin": "^9.0.1",
+    "dotenv": "^16.0.3",
     "glob": "^7.1.6",
     "jest": "^27.2.1",
     "prettier": "^2.2.1",
